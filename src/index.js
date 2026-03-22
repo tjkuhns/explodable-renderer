@@ -11,7 +11,7 @@ const path = require('path');
 const os = require('os');
 
 const app = express();
-app.use(express.json());h
+app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 const SUPABASE_URL = process.env.SUPABASE_URL;
