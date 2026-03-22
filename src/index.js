@@ -24,15 +24,15 @@ app.get('/health', (req, res) => {
 });
 
 // Main render endpoint
-// Expected body: { box_id, video_id, clip_suggestion_id, storage_path, start_time, end_time }
+// Expected body: { box_id, video_id, clip_suggestion_id, user_id, storage_path, start_time, end_time }
 app.post('/render', async (req, res) => {
   const authHeader = req.headers['x-render-secret'] || '';
   if (RENDER_SECRET && authHeader !== RENDER_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { box_id, video_id, clip_suggestion_id, storage_path, start_time, end_time } = req.body;
-  if (!box_id || !video_id || !clip_suggestion_id || !storage_path || start_time == null || end_time == null) {
+  const { box_id, video_id, clip_suggestion_id, user_id, storage_path, start_time, end_time } = req.body;
+  if (!box_id || !video_id || !clip_suggestion_id || !user_id || !storage_path || start_time == null || end_time == null) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
@@ -52,6 +52,7 @@ app.post('/render', async (req, res) => {
       id: clipId,
       clip_suggestion_id,
       box_id,
+      user_id,
       status: 'processing',
     });
 
@@ -67,7 +68,7 @@ app.post('/render', async (req, res) => {
     const signedUrl = signedData.signedUrl;
     console.log('[render] got signed URL');
 
-    // 3. Download raw video to temp
+    // 3. Download video to temp file
     const tmpDir = os.tmpdir();
     const inputPath = path.join(tmpDir, video_id + '_input.mp4');
     const outputPath = path.join(tmpDir, clip_suggestion_id + '_output.mp4');
@@ -107,38 +108,42 @@ app.post('/render', async (req, res) => {
     try { fs.unlinkSync(outputPath); } catch {}
 
   } catch (err) {
-    console.error('[render] error', err.message);
-    const supabase2 = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    await supabase2.from('clips').update({ status: 'failed', error_message: err.message }).eq('id', clipId);
-    await supabase2.from('videos').update({ status: 'failed' }).eq('id', video_id);
+    console.error('[render] error:', err);
+    await supabase.from('clips').update({
+      status: 'failed',
+      error_message: err.message,
+    }).eq('id', clipId).catch(() => {});
+    await supabase.from('videos').update({ status: 'failed' }).eq('id', video_id).catch(() => {});
   }
 });
 
-function downloadFile(url, dest) {
+function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
     const protocol = url.startsWith('https') ? https : http;
+    const file = fs.createWriteStream(destPath);
     protocol.get(url, (response) => {
-      if (response.statusCode === 302 || response.statusCode === 301) {
+      if (response.statusCode === 301 || response.statusCode === 302) {
         file.close();
-        return downloadFile(response.headers.location, dest).then(resolve).catch(reject);
+        fs.unlink(destPath, () => {});
+        return downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
       }
       response.pipe(file);
       file.on('finish', () => file.close(resolve));
     }).on('error', (err) => {
-      fs.unlink(dest, () => {});
+      fs.unlink(destPath, () => {});
       reject(err);
     });
   });
 }
 
-function runFfmpeg(input, output, startTime, duration) {
+function runFfmpeg(inputPath, outputPath, startTime, duration) {
   return new Promise((resolve, reject) => {
-    ffmpeg(input)
+    ffmpeg(inputPath)
       .setStartTime(startTime)
       .setDuration(duration)
-      .outputOptions('-c copy')
-      .output(output)
+      .output(outputPath)
+      .videoCodec('copy')
+      .audioCodec('copy')
       .on('end', resolve)
       .on('error', reject)
       .run();
@@ -146,5 +151,5 @@ function runFfmpeg(input, output, startTime, duration) {
 }
 
 app.listen(PORT, () => {
-  console.log('[explodable-renderer] listening on port', PORT);
+  console.log('[render] server listening on port', PORT);
 });
