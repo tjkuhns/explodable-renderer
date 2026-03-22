@@ -11,7 +11,7 @@ const path = require('path');
 const os = require('os');
 
 const app = express();
-app.use(express.json());
+app.use(express.json());h
 
 const PORT = process.env.PORT || 3001;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -93,7 +93,7 @@ app.post('/render', async (req, res) => {
 
     // 6. Update clips row to complete
     await supabase.from('clips').update({
-      status: 'complete',
+      status: 'ready',
       storage_path: clipStoragePath,
       duration_seconds: duration,
     }).eq('id', clipId);
@@ -110,7 +110,7 @@ app.post('/render', async (req, res) => {
   } catch (err) {
     console.error('[render] error:', err);
     await supabase.from('clips').update({
-      status: 'failed',
+      status: 'error',
       error_message: err.message,
     }).eq('id', clipId).catch(() => {});
     await supabase.from('videos').update({ status: 'failed' }).eq('id', video_id).catch(() => {});
