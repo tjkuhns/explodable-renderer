@@ -24,8 +24,8 @@ app.get('/health', (req, res) => {
 });
 
 // Main render endpoint
+// Expected body: { box_id, video_id, clip_suggestion_id, storage_path, start_time, end_time }
 app.post('/render', async (req, res) => {
-  // Auth check
   const authHeader = req.headers['x-render-secret'] || '';
   if (RENDER_SECRET && authHeader !== RENDER_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -40,12 +40,20 @@ app.post('/render', async (req, res) => {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-  // Acknowledge immediately — process async
+  // Acknowledge immediately - process async
   res.json({ status: 'queued', box_id });
 
+  // Find the clip record for this box
+  const clipId = uuidv4();
+
   try {
-    // 1. Mark box as processing
-    await supabase.from('the_box').update({ status: 'processing', render_started_at: new Date().toISOString() }).eq('id', box_id);
+    // 1. Insert a 'processing' clips row
+    await supabase.from('clips').insert({
+      id: clipId,
+      clip_suggestion_id,
+      box_id,
+      status: 'processing',
+    });
 
     // 2. Get signed URL for raw video
     const { data: signedData, error: signedError } = await supabase.storage
@@ -82,24 +90,14 @@ app.post('/render', async (req, res) => {
     if (uploadError) throw new Error('Upload failed: ' + uploadError.message);
     console.log('[render] uploaded clip to', clipStoragePath);
 
-    // 6. Insert into clips table
-    await supabase.from('clips').insert({
-      id: uuidv4(),
-      video_id,
-      clip_suggestion_id,
+    // 6. Update clips row to complete
+    await supabase.from('clips').update({
+      status: 'complete',
       storage_path: clipStoragePath,
       duration_seconds: duration,
-      created_at: new Date().toISOString()
-    });
+    }).eq('id', clipId);
 
-    // 7. Update the_box to complete
-    await supabase.from('the_box').update({
-      status: 'complete',
-      render_completed_at: new Date().toISOString(),
-      output_storage_path: clipStoragePath
-    }).eq('id', box_id);
-
-    // 8. Update video status to complete
+    // 7. Update video status to complete
     await supabase.from('videos').update({ status: 'complete' }).eq('id', video_id);
 
     console.log('[render] job complete', box_id);
@@ -111,7 +109,7 @@ app.post('/render', async (req, res) => {
   } catch (err) {
     console.error('[render] error', err.message);
     const supabase2 = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    await supabase2.from('the_box').update({ status: 'failed' }).eq('id', box_id);
+    await supabase2.from('clips').update({ status: 'failed', error_message: err.message }).eq('id', clipId);
     await supabase2.from('videos').update({ status: 'failed' }).eq('id', video_id);
   }
 });
